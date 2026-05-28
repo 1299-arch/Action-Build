@@ -528,12 +528,6 @@ jobs:
           fi
           ccache -s
 
-      - name: Install Repo Tool
-        run: |
-          curl https://storage.googleapis.com/git-repo-downloads/repo > ~/repo
-          chmod a+x ~/repo
-          sudo mv ~/repo /usr/local/bin/repo
-
       - name: Initialize Repo and Sync
         env:
           FILE: ${{ github.event.inputs.FILE }}
@@ -545,7 +539,41 @@ jobs:
 
           echo "使用$MANIFEST_REPO/$MANIFEST_REPO_NAME($MANIFEST_BRANCH)初始化仓库..."
           repo init -u "$BASE_URL" -b "$MANIFEST_BRANCH" -m "${FILE}.xml" --depth=1 --no-clone-bundle --no-tags
-          repo sync -c -j$(nproc) --no-clone-bundle --no-tags --force-sync
+          
+          # Enhanced sync with retry and partial failure handling
+          MAX_RETRIES=3
+          RETRY_COUNT=0
+          SYNC_SUCCESS=false
+          
+          while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
+            echo "Sync attempt $((RETRY_COUNT + 1))/$MAX_RETRIES..."
+            if repo sync -c -j$(nproc) --no-clone-bundle --no-tags --force-sync 2>&1 | tee sync_output.txt; then
+              echo "✅ Repo sync successful"
+              SYNC_SUCCESS=true
+              break
+            else
+              RETRY_COUNT=$((RETRY_COUNT + 1))
+              if [ $RETRY_COUNT -lt $MAX_RETRIES ]; then
+                echo "⚠️ Sync failed, retrying in 10 seconds..."
+                sleep 10
+              else
+                echo "❌ Sync failed after $MAX_RETRIES attempts"
+                # Extract failed repos and log as warning
+                FAILED_REPOS=$(grep -A 10 'Failing repos' sync_output.txt 2>/dev/null | tail -n +2 | grep -v '^$' || true)
+                if [ -n "$FAILED_REPOS" ]; then
+                  echo "::warning::Some repositories failed to sync:$FAILED_REPOS"
+                  echo "Attempting to continue with available repositories..."
+                  SYNC_SUCCESS=true
+                else
+                  exit 1
+                fi
+              fi
+            fi
+          done
+
+          if [ "$SYNC_SUCCESS" = false ]; then
+            exit 1
+          fi
 
           KERNEL_REPOS=""
           KERNEL_REPOS_PATH=$(find . -type f -name "build.config.msm.common" | head -n 1)
@@ -569,7 +597,6 @@ jobs:
             sed -i 's/check_defconfig = None,/check_defconfig = "disabled",/' kernel_platform/build/kernel/kleaf/common_kernels.bzl
             sed -i 's/if check_defconfig == None:/if False:  # check_defconfig == None:/' kernel_platform/build/kernel/kleaf/common_kernels.bzl
           fi
-
       - name: Kernel Version Handling
         run: |
           cd kernel_workspace/kernel_platform
