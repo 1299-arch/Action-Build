@@ -547,8 +547,10 @@ jobs:
           
           while [ $RETRY_COUNT -lt $MAX_RETRIES ]; do
             echo "Sync attempt $((RETRY_COUNT + 1))/$MAX_RETRIES..."
-            if repo sync -c -j$(nproc) --no-clone-bundle --no-tags --force-sync 2>&1 | tee sync_output.txt; then
-              echo "✅ Repo sync successful"
+          rm -rf kernel_platform/prebuilts/*
+
+          if repo sync -c -j1 --fail-fast --no-clone-bundle --no-tags --force-sync 2>&1 | tee sync_output.txt; then
+            echo "✅ Repo sync successful"
               SYNC_SUCCESS=true
               break
             else
